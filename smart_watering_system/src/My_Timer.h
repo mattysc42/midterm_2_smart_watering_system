@@ -18,4 +18,4 @@ class MyTimer {
       return timerPrevious;
     }
 };
-#endif _MY_TIMER_H_
+#endif
