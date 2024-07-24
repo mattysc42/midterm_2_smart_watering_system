@@ -5,24 +5,23 @@
  */
 
 #include "Particle.h"
+#include "credentials.h"
 #include "Adafruit_SSD1306.h"
 #include "Grove_Air_quality_Sensor.h"
 #include "Adafruit_BME280.h"
 #include "Adafruit_MQTT.h"
+#include "Adafruit_MQTT_SPARK.h"
 #include "My_Toggle.h"
 #include "My_Timer.h"
 #include "linear_conversion.h"
 
-const int SOILMOISTUREPIN = D11;
-const int PUMPPIN = D16;
-const int AQSENSEPIN = D12;
+const int SOILMOISTUREPIN = D11; //A0
+const int PUMPPIN = D9;
+const int AQSENSEPIN = D12; //A1
 const int DUSTPIN = D4;
 const int SDAPIN = D0;
 const int SCLPIN = D1;
 const int HALFHOUR = 1800000;
-
-
-
 
 // OLED variables or objects
 const int OLED_RESET = -1;
@@ -35,15 +34,29 @@ byte sensorAddress = 0x76;
 // seeed objects
 AirQualitySensor aqSensor(AQSENSEPIN);
 
+// Create the TCP Client
+TCPClient TheClient;
+
+// adafruit.io stuff
+Adafruit_MQTT_SPARK mqtt (&TheClient, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
+Adafruit_MQTT_Subscribe subFeedSeeed = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/seeeddata");
+Adafruit_MQTT_Subscribe subFeedAq = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/email");
+Adafruit_MQTT_Publish pubFeedSeeed = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/seeeddata");
+Adafruit_MQTT_Publish pubFeedAq = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/email");
+
 
 
 // toggle and timer objects
-MyToggle pumpToggle;
+// MyToggle pumpToggle;
+
+bool pumpToggle = false;
 
 MyTimer timerPump;
 MyTimer timerMoistureSensor;
 MyTimer timerDustSensor;
+MyTimer timerAqSensor;
 MyTimer timerSensorCycle;
+MyTimer timerSerialPrint;
 
 SYSTEM_MODE(AUTOMATIC);
 
@@ -51,10 +64,9 @@ SYSTEM_MODE(AUTOMATIC);
 
 //SerialLogHandler logHandler(LOG_LEVEL_INFO);
 
-void activatePump(int READPIN);
+//void activatePump(int READPIN, bool toggle);
 int checkMoisture(int READPIN);
 void getDustConcentration(int READPIN);
-float getMappedHumidity();
 float getTempFar();
 float getPressureMerc();
 
@@ -65,6 +77,7 @@ void setup() {
     Serial.begin(9600);
 
     pinMode(SOILMOISTUREPIN, INPUT);
+    pinMode(PUMPPIN, OUTPUT);
     WiFi.on();
     WiFi.connect();
 
@@ -92,33 +105,33 @@ void setup() {
 }
 
 void loop() {
-    if(timerSensorCycle.setTimer(HALFHOUR)) {
-        timerSensorCycle.startTimer();
-        if(checkMoisture(SOILMOISTUREPIN) > 2800) {
-            // toggle pump to on.
-            pumpToggle.toggle();
-            activatePump(PUMPPIN);
+    if(timerMoistureSensor.setTimer(HALFHOUR)) {
+        if(checkMoisture(SOILMOISTUREPIN) > 2000) {
+            pumpToggle = true;
+            Serial.printf("Pump toggle = TRUE\n");
         }
     }
-}
 
-void activatePump(int READPIN) {
+    if(pumpToggle == true) {
+        pumpToggle = false;
+        digitalWrite(PUMPPIN, HIGH);
+        delay(500);
+        digitalWrite(PUMPPIN, LOW);
+        Serial.printf("Pump toggle = FALSE\n");
 
-    if(pumpToggle.toggle() == true) {
-        // toggle to false at activation then turn the pump on.
-        pumpToggle.toggle();
-        digitalWrite(READPIN, HIGH);
+    }
 
-        // turn the pump off after 500ms
-        if(timerPump.setTimer(500)) {
-            timerPump.startTimer();
-            digitalWrite(READPIN, LOW);
-        }
+    // OLED output
+    if(timerSerialPrint.setTimer(1000)) {
+        Serial.printf("Humidity is: %0.2f\n", bmeSensor.readHumidity());
+        myOLED.printf("Humidity: %0.2f", bmeSensor.readHumidity());
     }
 }
 
 int checkMoisture(int READPIN) {
     int soilMoisture = analogRead(READPIN);
+    Serial.printf("Soil moisture is: %i\n", analogRead(READPIN));
+
     return soilMoisture;
 }
 
@@ -136,12 +149,7 @@ void getDustConcentration(int READPIN) {
         concentration = 1.1 * pow(ratio, 3) - 3.8 * pow(ratio, 2) + 520 * ratio + 0.62;
         Serial.printf("\nOccupency is: %i\nRatio is: %0.4f\nConcentration is: %0.4f\n", lowPulseOccupency, ratio, concentration);
         lowPulseOccupency = 0;
-        timerDustSensor.startTimer();
     }
-}
-
-float getMappedHumidity() {
-    return mapFloat(bmeSensor.readHumidity(), 0, 4096, 0, 100);
 }
 
 float getTempFar() {
@@ -156,3 +164,32 @@ float getPressureMerc() {
     return outputPressure;
 }
 
+void outputAqData() {
+    int aqInput = aqSensor.slope();
+    if(timerAqSensor.setTimer(30000)) {
+        timerAqSensor.startTimer();
+        int aqValue = aqSensor.getValue();
+        Serial.printf("AQ sensor value is: %i\n", aqValue);
+
+        if (aqInput == AirQualitySensor::HIGH_POLLUTION) {
+            Serial.printf("Air quality is poor.\n");
+            pubFeedAq.publish("\nAir quality is poor.\n");
+            pubFeedAq.publish(aqValue);
+        } 
+        else if (aqInput == AirQualitySensor::LOW_POLLUTION) {
+            Serial.printf("Air quality is good!\n");
+            pubFeedAq.publish("\nAir quality is good.\n");
+            pubFeedAq.publish(aqValue);
+        } 
+        else if (aqInput == AirQualitySensor::FRESH_AIR) {
+            Serial.printf("Air is fresh!\n");
+            pubFeedAq.publish("\nAir quality is great!\n");
+            pubFeedAq.publish(aqValue);
+        }
+        else if (aqInput == AirQualitySensor::FORCE_SIGNAL) {
+            Serial.printf("Air quality is VERY poor.\n");
+            pubFeedAq.publish("\nAir quality is VERY poor!\n");
+            pubFeedAq.publish(aqValue);
+        }
+    }
+}
