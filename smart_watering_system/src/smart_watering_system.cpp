@@ -17,8 +17,8 @@
 
 const int SOILMOISTUREPIN = D11; //A0
 const int PUMPPIN = D9;
-const int AQSENSEPIN = D12; //A1
-const int DUSTPIN = D4;
+const int AQSENSEPIN = D14; //A5
+const int DUSTPIN = D7;
 const int SDAPIN = D0;
 const int SCLPIN = D1;
 const int HALFHOUR = 1800000;
@@ -89,6 +89,7 @@ void setup() {
     
     // pinmodes
     pinMode(SOILMOISTUREPIN, INPUT);
+    pinMode(DUSTPIN, INPUT);
     pinMode(PUMPPIN, OUTPUT);
 
     //wifi, mqtt stuff
@@ -138,17 +139,14 @@ void loop() {
         digitalWrite(PUMPPIN, LOW);
         Serial.printf("Pump toggle = FALSE\n");
     }
-
-    dustConcentration = getDustConcentration(DUSTPIN);
-
     // OLED stuff
 
     if(timerOLEDPrint.setTimer(1000)) {
         if(toggleOLED == false) {
             // second OLED page
             myOLED.setCursor(0, 0);
-            //aqDataOLED();
-           // myOLED.printf("Dust: %0.4f\n", dustConcentration);
+            aqDataOLED();
+            myOLED.printf("Dust: %0.4f\n", dustConcentration);
             myOLED.printf("Soil moisture: %i\n", analogRead(SOILMOISTUREPIN));
             printTimeOLED();
             myOLED.display();
@@ -162,11 +160,13 @@ void loop() {
             printTimeOLED();
             myOLED.display();
         }
+        myOLED.clearDisplay();
     }
-    myOLED.clearDisplay();
     if(timerDateTime.setTimer(5000)) {
         toggleOLED = !toggleOLED;
     }
+    dustConcentration = getDustConcentration(DUSTPIN);
+
 }
 
 int checkMoisture(int READPIN) {
@@ -179,18 +179,22 @@ int checkMoisture(int READPIN) {
 // Uses pulseIn to get and a slope from the seeed library to get dust concentration.
 float getDustConcentration(int READPIN) {
     static int duration, lowPulseOccupency;
-    int sampleTime = 30000;
+    const int SAMPLETIME = 30000;
     static float ratio, concentration;
+    static float previousConcentration;
  
     duration = pulseIn(READPIN, LOW);
     lowPulseOccupency = lowPulseOccupency + duration;
 
-    if(timerDustSensor.setTimer(sampleTime)) {
-        ratio = lowPulseOccupency / (sampleTime * 10.0);
+    if(timerDustSensor.setTimer(SAMPLETIME)) {
+        ratio = lowPulseOccupency / (SAMPLETIME * 10.0);
         concentration = 1.1 * pow(ratio, 3) - 3.8 * pow(ratio, 2) + 520 * ratio + 0.62;
         lowPulseOccupency = 0;
+        previousConcentration = concentration;
+        return concentration;
     }
-    return concentration;
+
+    return previousConcentration;
 }
 
 float getTempFar() {
