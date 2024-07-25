@@ -23,6 +23,8 @@ const int SDAPIN = D0;
 const int SCLPIN = D1;
 const int HALFHOUR = 1800000;
 
+float dustConcentration;
+
 // OLED variables or objects
 const int OLED_RESET = -1;
 Adafruit_SSD1306 myOLED(OLED_RESET);
@@ -58,7 +60,7 @@ bool toggleOLED;
 MyTimer timerMoistureSensor;
 MyTimer timerDustSensor;
 MyTimer timerAqSensor;
-MyTimer timerSerialPrint;
+MyTimer timerOLEDPrint;
 MyTimer timerDateTime;
 
 SYSTEM_MODE(AUTOMATIC);
@@ -71,10 +73,11 @@ SYSTEM_MODE(AUTOMATIC);
 void MQTT_connect();
 bool MQTT_ping();
 int checkMoisture(int READPIN);
-void getDustConcentration(int READPIN);
+float getDustConcentration(int READPIN);
 float getTempFar();
 float getPressureMerc();
-void outputAqData();
+void aqDataOLED();
+void aqDataPublish();
 void printTimeOLED();
 
 
@@ -136,41 +139,45 @@ void loop() {
         Serial.printf("Pump toggle = FALSE\n");
     }
 
+    dustConcentration = getDustConcentration(DUSTPIN);
+
     // OLED stuff
-    if(timerDateTime.setTimer(10000)) {
-        toggleOLED = !toggleOLED;
+
+    if(timerOLEDPrint.setTimer(1000)) {
+        if(toggleOLED == false) {
+            // second OLED page
+            myOLED.setCursor(0, 0);
+            //aqDataOLED();
+           // myOLED.printf("Dust: %0.4f\n", dustConcentration);
+            myOLED.printf("Soil moisture: %i\n", analogRead(SOILMOISTUREPIN));
+            printTimeOLED();
+            myOLED.display();
+        }
         if(toggleOLED == true) {
             // first OLED page
             myOLED.setCursor(0, 0);
             myOLED.printf("Humidity: %0.2f%%\n", bmeSensor.readHumidity());
             myOLED.printf("Pressure: %0.2f\n", getPressureMerc());
             myOLED.printf("Temp: %0.2f F\n", getTempFar());
+            printTimeOLED();
+            myOLED.display();
         }
-        if(toggleOLED == false) {
-            // second OLED page
-            myOLED.setCursor(0, 0);   
-            outputAqData();
-            checkMoisture(SOILMOISTUREPIN);
-            getDustConcentration(DUSTPIN);
-        }
-        printTimeOLED();
-        myOLED.display();
-        myOLED.clearDisplay();
+    }
+    myOLED.clearDisplay();
+    if(timerDateTime.setTimer(5000)) {
+        toggleOLED = !toggleOLED;
     }
 }
 
-
-
 int checkMoisture(int READPIN) {
     int soilMoisture = analogRead(READPIN);
-    Serial.printf("Soil moisture: %i\n", analogRead(READPIN));
     myOLED.printf("Soil moisture: %i\n", analogRead(READPIN));
 
     return soilMoisture;
 }
 
 // Uses pulseIn to get and a slope from the seeed library to get dust concentration.
-void getDustConcentration(int READPIN) {
+float getDustConcentration(int READPIN) {
     static int duration, lowPulseOccupency;
     int sampleTime = 30000;
     static float ratio, concentration;
@@ -181,10 +188,9 @@ void getDustConcentration(int READPIN) {
     if(timerDustSensor.setTimer(sampleTime)) {
         ratio = lowPulseOccupency / (sampleTime * 10.0);
         concentration = 1.1 * pow(ratio, 3) - 3.8 * pow(ratio, 2) + 520 * ratio + 0.62;
-        Serial.printf("\nOccupency is: %i\nRatio is: %0.4f\nConcentration is: %0.4f\n", lowPulseOccupency, ratio, concentration);
         lowPulseOccupency = 0;
     }
-    myOLED.printf("Dust level: %0.4f\n", concentration);
+    return concentration;
 }
 
 float getTempFar() {
@@ -199,31 +205,28 @@ float getPressureMerc() {
     return outputPressure;
 }
 
-void outputAqData() {
+void aqDataOLED() {
     int aqInput = aqSensor.slope();
     int aqValue = aqSensor.getValue();
     myOLED.printf("AQ value: %i\n", aqValue);
 
-    Serial.printf("AQ sensor value is: %i\n", aqValue);
-
     if (aqInput == AirQualitySensor::HIGH_POLLUTION) {
-        Serial.printf("Air quality is poor.\n");
         myOLED.printf("Air quality is poor.\n");
     } 
     else if (aqInput == AirQualitySensor::LOW_POLLUTION) {
-        Serial.printf("Air quality is good!\n");
         myOLED.printf("Air quality is good.\n");
     } 
     else if (aqInput == AirQualitySensor::FRESH_AIR) {
-        Serial.printf("Air is fresh!\n");
         myOLED.printf("Air is fresh.\n");
     }
     else if (aqInput == AirQualitySensor::FORCE_SIGNAL) {
-        Serial.printf("Air quality is VERY poor.\n");
         myOLED.printf("Air quality is VERY poor.\n");
     }
-    
+}
 
+void aqDataPublish() {
+    int aqInput = aqSensor.slope();
+    int aqValue = aqSensor.getValue();
     if(timerAqSensor.setTimer(30000)) {
         if (aqInput == AirQualitySensor::HIGH_POLLUTION) {
             pubFeedAq.publish("\nAir quality is poor.\n");
@@ -247,7 +250,7 @@ void outputAqData() {
 void printTimeOLED() {
     String dateTime, timeOnly, dateOnly;
     dateTime = Time.timeStr();
-    timeOnly = dateTime.substring(11, 17);
+    timeOnly = dateTime.substring(11, 19);
     dateOnly = dateTime.substring(0, 10);
     Serial.printf("\n\n%s\n%s\n", dateOnly.c_str(), timeOnly.c_str());
     myOLED.printf("\n\n%s\n%s\n", dateOnly.c_str(), timeOnly.c_str());

@@ -1,7 +1,7 @@
 #ifndef _MY_TIMER_H_
 #define _MY_TIMER_H_
 
-// you need setTimer as a condition for an 'if' or 'while' statement and startTimer inside the conditional statement for this to work.
+// you need setTimer as a condition for an 'if' or 'while' statement. Nested timers don't work!
 class MyTimer {
   int timerPrevious = -99999;
   
