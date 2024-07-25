@@ -15,15 +15,15 @@
 #include "My_Timer.h"
 #include "linear_conversion.h"
 
-const int SOILMOISTUREPIN = D11; //A0
+const int SOILMOISTUREPIN = A1; //A0
 const int PUMPPIN = D9;
-const int AQSENSEPIN = D14; //A5
-const int DUSTPIN = D7;
+const int AQSENSEPIN = A5; //A5
+const int DUSTPIN = D19;
 const int SDAPIN = D0;
 const int SCLPIN = D1;
 const int HALFHOUR = 1800000;
 
-float dustConcentration;
+int soilMoisture;
 
 // OLED variables or objects
 const int OLED_RESET = -1;
@@ -69,11 +69,10 @@ SYSTEM_MODE(AUTOMATIC);
 
 //SerialLogHandler logHandler(LOG_LEVEL_INFO);
 
-//void activatePump(int READPIN, bool toggle);
 void MQTT_connect();
 bool MQTT_ping();
 int checkMoisture(int READPIN);
-float getDustConcentration(int READPIN);
+void getDustConcentration(int READPIN);
 float getTempFar();
 float getPressureMerc();
 void aqDataOLED();
@@ -89,7 +88,7 @@ void setup() {
     
     // pinmodes
     pinMode(SOILMOISTUREPIN, INPUT);
-    pinMode(DUSTPIN, INPUT);
+    pinMode(DUSTPIN, INPUT_PULLUP);
     pinMode(PUMPPIN, OUTPUT);
 
     //wifi, mqtt stuff
@@ -123,13 +122,16 @@ void setup() {
 }
 
 void loop() {
-    dustConcentration = getDustConcentration(DUSTPIN);
+    MQTT_connect();
+    MQTT_ping();
+    getDustConcentration(DUSTPIN);
+    soilMoisture = analogRead(SOILMOISTUREPIN);
     // pump stuff
     if(timerMoistureSensor.setTimer(HALFHOUR)) {
-        if(analogRead(SOILMOISTUREPIN) > 3000) {
+        if(soilMoisture > 3000) {
             pumpToggle = true;
             Serial.printf("Pump toggle = TRUE\n");
-            pubFeedEmail.publish(analogRead(SOILMOISTUREPIN));
+            pubFeedEmail.publish(soilMoisture);
         }
     }
 
@@ -147,8 +149,7 @@ void loop() {
             // second OLED page
             myOLED.setCursor(0, 0);
             aqDataOLED();
-            myOLED.printf("Dust: %0.4f\n", dustConcentration);
-            myOLED.printf("Soil moisture: %i\n", analogRead(SOILMOISTUREPIN));
+            myOLED.printf("Soil moisture: %i\n", soilMoisture);
             printTimeOLED();
             myOLED.display();
         }
@@ -170,17 +171,16 @@ void loop() {
 
 int checkMoisture(int READPIN) {
     int soilMoisture = analogRead(READPIN);
-    myOLED.printf("Soil moisture: %i\n", analogRead(READPIN));
+    myOLED.printf("Soil moisture: %i\n", soilMoisture);
 
     return soilMoisture;
 }
 
 // Uses pulseIn to get and a slope from the seeed library to get dust concentration.
-float getDustConcentration(int READPIN) {
+void getDustConcentration(int READPIN) {
     static int duration, lowPulseOccupency;
     int sampleTime = 30000;
-    static float previousConcentration;
-    float ratio, concentration;
+    static float ratio, concentration;
     
     duration = pulseIn(READPIN, LOW);
     lowPulseOccupency = lowPulseOccupency + duration;
@@ -189,9 +189,8 @@ float getDustConcentration(int READPIN) {
         ratio = lowPulseOccupency / (sampleTime * 10.0);
         concentration = 1.1 * pow(ratio, 3) - 3.8 * pow(ratio, 2) + 520 * ratio + 0.62;
         lowPulseOccupency = 0;
-        previousConcentration = concentration;
-    }
-    return previousConcentration;    
+        pubFeedSeeed.publish(concentration);
+    }  
 }
 
 float getTempFar() {
@@ -212,16 +211,16 @@ void aqDataOLED() {
     myOLED.printf("AQ value: %i\n", aqValue);
 
     if (aqInput == AirQualitySensor::HIGH_POLLUTION) {
-        myOLED.printf("Air quality is poor.\n");
+        myOLED.printf("AQ is poor.\n");
     } 
     else if (aqInput == AirQualitySensor::LOW_POLLUTION) {
-        myOLED.printf("Air quality is good.\n");
+        myOLED.printf("AQ is good.\n");
     } 
     else if (aqInput == AirQualitySensor::FRESH_AIR) {
-        myOLED.printf("Air is fresh.\n");
+        myOLED.printf("AQ is fresh.\n");
     }
     else if (aqInput == AirQualitySensor::FORCE_SIGNAL) {
-        myOLED.printf("Air quality is VERY poor.\n");
+        myOLED.printf("AQ is VERY poor.\n");
     }
 }
 
@@ -231,19 +230,15 @@ void aqDataPublish() {
     if(timerAqSensor.setTimer(30000)) {
         if (aqInput == AirQualitySensor::HIGH_POLLUTION) {
             pubFeedAq.publish("\nAir quality is poor.\n");
-            pubFeedAq.publish(aqValue);
         } 
         else if (aqInput == AirQualitySensor::LOW_POLLUTION) {
             pubFeedAq.publish("\nAir quality is good.\n");
-            pubFeedAq.publish(aqValue);
         } 
         else if (aqInput == AirQualitySensor::FRESH_AIR) {
             pubFeedAq.publish("\nAir quality is great!\n");
-            pubFeedAq.publish(aqValue);
         }
         else if (aqInput == AirQualitySensor::FORCE_SIGNAL) {
             pubFeedAq.publish("\nAir quality is VERY poor!\n");
-            pubFeedAq.publish(aqValue);
         }
     }
 }
