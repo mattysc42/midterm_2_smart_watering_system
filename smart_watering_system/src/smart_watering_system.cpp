@@ -40,9 +40,12 @@ TCPClient TheClient;
 // adafruit.io stuff
 Adafruit_MQTT_SPARK mqtt (&TheClient, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
 Adafruit_MQTT_Subscribe subFeedSeeed = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/seeeddata");
-Adafruit_MQTT_Subscribe subFeedAq = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/email");
+Adafruit_MQTT_Subscribe subFeedAq = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/aqdata");
+Adafruit_MQTT_Subscribe subFeedEmail = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/email");
+
 Adafruit_MQTT_Publish pubFeedSeeed = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/seeeddata");
-Adafruit_MQTT_Publish pubFeedAq = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/email");
+Adafruit_MQTT_Publish pubFeedAq = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/aqdata");
+Adafruit_MQTT_Publish pubFeedEmail = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/email");
 
 
 
@@ -52,11 +55,9 @@ Adafruit_MQTT_Publish pubFeedAq = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/fe
 bool pumpToggle;
 bool toggleOLED;
 
-MyTimer timerPump;
 MyTimer timerMoistureSensor;
 MyTimer timerDustSensor;
 MyTimer timerAqSensor;
-MyTimer timerSensorCycle;
 MyTimer timerSerialPrint;
 MyTimer timerDateTime;
 
@@ -67,6 +68,8 @@ SYSTEM_MODE(AUTOMATIC);
 //SerialLogHandler logHandler(LOG_LEVEL_INFO);
 
 //void activatePump(int READPIN, bool toggle);
+void MQTT_connect();
+bool MQTT_ping();
 int checkMoisture(int READPIN);
 void getDustConcentration(int READPIN);
 float getTempFar();
@@ -80,11 +83,17 @@ void setup() {
     Serial.begin(9600);
     Time.zone(-7); // MST = -7, MDT = -6
     Particle.syncTime();
-
+    
+    // pinmodes
     pinMode(SOILMOISTUREPIN, INPUT);
     pinMode(PUMPPIN, OUTPUT);
+
+    //wifi, mqtt stuff
     WiFi.on();
     WiFi.connect();
+    mqtt.subscribe(&subFeedSeeed);
+    mqtt.subscribe(&subFeedEmail);
+    mqtt.subscribe(&subFeedAq);
 
     if (aqSensor.init()) {
         Serial.printf("Sensor ready.");
@@ -115,6 +124,7 @@ void loop() {
         if(analogRead(SOILMOISTUREPIN) > 3000) {
             pumpToggle = true;
             Serial.printf("Pump toggle = TRUE\n");
+            pubFeedEmail.publish(analogRead(SOILMOISTUREPIN));
         }
     }
 
@@ -124,7 +134,6 @@ void loop() {
         delay(500);
         digitalWrite(PUMPPIN, LOW);
         Serial.printf("Pump toggle = FALSE\n");
-
     }
 
     // OLED stuff
@@ -242,4 +251,39 @@ void printTimeOLED() {
     dateOnly = dateTime.substring(0, 10);
     Serial.printf("\n\n%s\n%s\n", dateOnly.c_str(), timeOnly.c_str());
     myOLED.printf("\n\n%s\n%s\n", dateOnly.c_str(), timeOnly.c_str());
+}
+
+void MQTT_connect() {
+    int8_t ret;
+ 
+    // Return if already connected.
+    if (mqtt.connected()) {
+        return;
+    }
+ 
+    Serial.print("Connecting to MQTT... ");
+ 
+    while ((ret = mqtt.connect()) != 0) { // connect will return 0 for connected
+       Serial.printf("Error Code %s\n",mqtt.connectErrorString(ret));
+       Serial.printf("Retrying MQTT connection in 5 seconds...\n");
+       mqtt.disconnect();
+       delay(5000);  // wait 5 seconds and try again
+    }
+    Serial.printf("MQTT Connected!\n");
+}
+
+bool MQTT_ping() {
+    static unsigned int last;
+    bool pingStatus;
+
+    if ((millis()-last)>120001) {
+        Serial.printf("Pinging MQTT \n");
+        pingStatus = mqtt.ping();
+        if(!pingStatus) {
+            Serial.printf("Disconnecting \n");
+            mqtt.disconnect();
+        }
+        last = millis();
+    }
+    return pingStatus;
 }
