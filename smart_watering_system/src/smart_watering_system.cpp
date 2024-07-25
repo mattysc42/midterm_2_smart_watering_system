@@ -123,6 +123,7 @@ void setup() {
 }
 
 void loop() {
+    dustConcentration = getDustConcentration(DUSTPIN);
     // pump stuff
     if(timerMoistureSensor.setTimer(HALFHOUR)) {
         if(analogRead(SOILMOISTUREPIN) > 3000) {
@@ -140,7 +141,7 @@ void loop() {
         Serial.printf("Pump toggle = FALSE\n");
     }
     // OLED stuff
-
+    
     if(timerOLEDPrint.setTimer(1000)) {
         if(toggleOLED == false) {
             // second OLED page
@@ -165,8 +166,6 @@ void loop() {
     if(timerDateTime.setTimer(5000)) {
         toggleOLED = !toggleOLED;
     }
-    dustConcentration = getDustConcentration(DUSTPIN);
-
 }
 
 int checkMoisture(int READPIN) {
@@ -179,22 +178,20 @@ int checkMoisture(int READPIN) {
 // Uses pulseIn to get and a slope from the seeed library to get dust concentration.
 float getDustConcentration(int READPIN) {
     static int duration, lowPulseOccupency;
-    const int SAMPLETIME = 30000;
-    static float ratio, concentration;
+    int sampleTime = 30000;
     static float previousConcentration;
- 
+    float ratio, concentration;
+    
     duration = pulseIn(READPIN, LOW);
     lowPulseOccupency = lowPulseOccupency + duration;
 
-    if(timerDustSensor.setTimer(SAMPLETIME)) {
-        ratio = lowPulseOccupency / (SAMPLETIME * 10.0);
+    if(timerDustSensor.setTimer(sampleTime)) {
+        ratio = lowPulseOccupency / (sampleTime * 10.0);
         concentration = 1.1 * pow(ratio, 3) - 3.8 * pow(ratio, 2) + 520 * ratio + 0.62;
         lowPulseOccupency = 0;
         previousConcentration = concentration;
-        return concentration;
     }
-
-    return previousConcentration;
+    return previousConcentration;    
 }
 
 float getTempFar() {
