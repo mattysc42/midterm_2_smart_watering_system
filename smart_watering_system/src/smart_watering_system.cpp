@@ -11,52 +11,46 @@
 #include "Adafruit_BME280.h"
 #include "Adafruit_MQTT.h"
 #include "Adafruit_MQTT_SPARK.h"
-#include "My_Toggle.h"
 #include "My_Timer.h"
-#include "linear_conversion.h"
 
+// constants
 const int SOILMOISTUREPIN = A1; //A0
 const int PUMPPIN = D9;
 const int AQSENSEPIN = A5; //A5
 const int DUSTPIN = D19;
-const int SDAPIN = D0;
-const int SCLPIN = D1;
 const int HALFHOUR = 1800000;
 
+// global variables
 int soilMoisture;
+float dustConcentration;
 
-// OLED variables or objects
+// toggle variables
+bool pumpToggle;
+bool toggleOLED;
+bool toggleEmailButton;
+
+// OLED object
 const int OLED_RESET = -1;
 Adafruit_SSD1306 myOLED(OLED_RESET);
 
-// BME objects
+// BME object
 Adafruit_BME280 bmeSensor;
 byte sensorAddress = 0x76;
 
 // seeed objects
 AirQualitySensor aqSensor(AQSENSEPIN);
 
-// Create the TCP Client
-TCPClient TheClient;
-
 // adafruit.io stuff
+TCPClient TheClient;
 Adafruit_MQTT_SPARK mqtt (&TheClient, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
-Adafruit_MQTT_Subscribe subFeedSeeed = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/seeeddata");
-Adafruit_MQTT_Subscribe subFeedAq = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/aqdata");
 Adafruit_MQTT_Subscribe subFeedEmail = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/email");
 
 Adafruit_MQTT_Publish pubFeedSeeed = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/seeeddata");
 Adafruit_MQTT_Publish pubFeedAq = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/aqdata");
 Adafruit_MQTT_Publish pubFeedEmail = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/email");
+Adafruit_MQTT_Publish pubFeedSoilMoisture = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/soilmoisture");
 
-
-
-// toggle and timer objects
-// MyToggle pumpToggle;
-
-bool pumpToggle;
-bool toggleOLED;
-
+// timer objects
 MyTimer timerMoistureSensor;
 MyTimer timerDustSensor;
 MyTimer timerAqSensor;
@@ -65,21 +59,15 @@ MyTimer timerDateTime;
 
 SYSTEM_MODE(AUTOMATIC);
 
-// SYSTEM_THREAD(ENABLED);
-
-//SerialLogHandler logHandler(LOG_LEVEL_INFO);
-
+// My Functions
 void MQTT_connect();
 bool MQTT_ping();
-int checkMoisture(int READPIN);
-void getDustConcentration(int READPIN);
+float getDustConcentration(int READPIN);
 float getTempFar();
 float getPressureMerc();
 void aqDataOLED();
 void aqDataPublish();
 void printTimeOLED();
-
-
 
 void setup() {
     Serial.begin(9600);
@@ -94,9 +82,7 @@ void setup() {
     //wifi, mqtt stuff
     WiFi.on();
     WiFi.connect();
-    mqtt.subscribe(&subFeedSeeed);
     mqtt.subscribe(&subFeedEmail);
-    mqtt.subscribe(&subFeedAq);
 
     if (aqSensor.init()) {
         Serial.printf("Sensor ready.");
@@ -110,7 +96,7 @@ void setup() {
     myOLED.setTextSize(1);
     myOLED.setTextColor(1, 0);
     myOLED.setCursor(0, 0);
-    myOLED.printf("BME Monitor\n------------\n");
+    myOLED.printf("Smart Planter\n------------\n");
     myOLED.display();
     delay(2000);
 
@@ -124,8 +110,9 @@ void setup() {
 void loop() {
     MQTT_connect();
     MQTT_ping();
-    getDustConcentration(DUSTPIN);
+    dustConcentration = getDustConcentration(DUSTPIN);
     soilMoisture = analogRead(SOILMOISTUREPIN);
+
     // pump stuff
     if(timerMoistureSensor.setTimer(HALFHOUR)) {
         if(soilMoisture > 3000) {
@@ -135,6 +122,14 @@ void loop() {
         }
     }
 
+    // turn pumpToggle to true if the pump button in the adafruit dashboard is pressed for 3 seconds.
+    Adafruit_MQTT_Subscribe *subscription;
+    while ((subscription = mqtt.readSubscription(100))) {
+        toggleEmailButton = atoi((char *)subFeedEmail.lastread);
+        pumpToggle = toggleEmailButton;
+    }
+
+    // turn pump on for half a second if pumptoggle == true
     if(pumpToggle == true) {
         pumpToggle = false;
         digitalWrite(PUMPPIN, HIGH);
@@ -142,12 +137,13 @@ void loop() {
         digitalWrite(PUMPPIN, LOW);
         Serial.printf("Pump toggle = FALSE\n");
     }
+
     // OLED stuff
-    
     if(timerOLEDPrint.setTimer(1000)) {
         if(toggleOLED == false) {
             // second OLED page
             myOLED.setCursor(0, 0);
+            myOLED.printf("Dust: %0.2f\n", dustConcentration);
             aqDataOLED();
             myOLED.printf("Soil moisture: %i\n", soilMoisture);
             printTimeOLED();
@@ -158,27 +154,23 @@ void loop() {
             myOLED.setCursor(0, 0);
             myOLED.printf("Humidity: %0.2f%%\n", bmeSensor.readHumidity());
             myOLED.printf("Pressure: %0.2f\n", getPressureMerc());
-            myOLED.printf("Temp: %0.2f F\n", getTempFar());
+            myOLED.printf("Temp: %0.2f F\n\n", getTempFar());
             printTimeOLED();
             myOLED.display();
         }
         myOLED.clearDisplay();
     }
-    if(timerDateTime.setTimer(5000)) {
+    // publish to adafruit dashboard and toggle OLED output every 6 seconds.
+    if(timerDateTime.setTimer(6000)) {
+        aqDataPublish();
+        pubFeedSoilMoisture.publish(analogRead(SOILMOISTUREPIN));
         toggleOLED = !toggleOLED;
     }
 }
 
-int checkMoisture(int READPIN) {
-    int soilMoisture = analogRead(READPIN);
-    myOLED.printf("Soil moisture: %i\n", soilMoisture);
-
-    return soilMoisture;
-}
-
 // Uses pulseIn to get and a slope from the seeed library to get dust concentration.
-void getDustConcentration(int READPIN) {
-    static int duration, lowPulseOccupency;
+float getDustConcentration(int READPIN) {
+    static unsigned long duration, lowPulseOccupency;
     int sampleTime = 30000;
     static float ratio, concentration;
     
@@ -189,22 +181,26 @@ void getDustConcentration(int READPIN) {
         ratio = lowPulseOccupency / (sampleTime * 10.0);
         concentration = 1.1 * pow(ratio, 3) - 3.8 * pow(ratio, 2) + 520 * ratio + 0.62;
         lowPulseOccupency = 0;
-        pubFeedSeeed.publish(concentration);
-    }  
+        pubFeedSeeed.publish(dustConcentration);
+    }
+    return concentration;
 }
 
+// get the temperature from the BME and convert it to Fahrenheit
 float getTempFar() {
     float tempCel = bmeSensor.readTemperature();
     float outputTempFar = (tempCel * 1.8) + 32.0;
     return outputTempFar;
 }
 
+// get the barometric pressure in inches of mercury
 float getPressureMerc() {
     float inputPressure = bmeSensor.readPressure();
     float outputPressure = (inputPressure * 0.00029530) + 5;
     return outputPressure;
 }
 
+// output the air quality data to the OLED
 void aqDataOLED() {
     int aqInput = aqSensor.slope();
     int aqValue = aqSensor.getValue();
@@ -224,9 +220,9 @@ void aqDataOLED() {
     }
 }
 
+// output the air quality data to the adafruit dashboard
 void aqDataPublish() {
     int aqInput = aqSensor.slope();
-    int aqValue = aqSensor.getValue();
     if(timerAqSensor.setTimer(30000)) {
         if (aqInput == AirQualitySensor::HIGH_POLLUTION) {
             pubFeedAq.publish("\nAir quality is poor.\n");
@@ -243,12 +239,12 @@ void aqDataPublish() {
     }
 }
 
+// print the date and time to the minute to the OLED
 void printTimeOLED() {
     String dateTime, timeOnly, dateOnly;
     dateTime = Time.timeStr();
-    timeOnly = dateTime.substring(11, 19);
+    timeOnly = dateTime.substring(11, 16);
     dateOnly = dateTime.substring(0, 10);
-    Serial.printf("\n\n%s\n%s\n", dateOnly.c_str(), timeOnly.c_str());
     myOLED.printf("\n\n%s\n%s\n", dateOnly.c_str(), timeOnly.c_str());
 }
 
