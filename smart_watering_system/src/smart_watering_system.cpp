@@ -14,9 +14,9 @@
 #include "My_Timer.h"
 
 // constants
-const int SOILMOISTUREPIN = A1; //A0
+const int SOILMOISTUREPIN = A1; 
 const int PUMPPIN = D9;
-const int AQSENSEPIN = A5; //A5
+const int AQSENSEPIN = A5; 
 const int DUSTPIN = D19;
 const int HALFHOUR = 1800000;
 
